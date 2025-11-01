@@ -1,5 +1,6 @@
 use crate::types::*;
 use rand::prelude::*;
+use std::collections::HashMap;
 // --- CONSTANTES DE COSTO ---
 const SETTLEMENT_COST: &[(MaterialType, u8)] = &[
     (MaterialType::Brick, 1),
@@ -24,6 +25,211 @@ const DEVELOPMENT_CARD_COST: &[(MaterialType, u8)] = &[
     (MaterialType::Stone, 1), // Asumo que Stone es tu "mineral"
 ];
 
+/**
+ * Otorga recursos a TODOS los jugadores basado en una tirada de dado.
+ *
+ * Esta función asume que la tirada NO es un 7.
+ * La lógica del juego principal (fuera de esta función)
+ * debe manejar el 7 (mover al ladrón) por separado.
+ */
+pub fn give_materials_on_roll(board: &mut Board, number_rolled: u8) {
+    
+    // Paso 1: "Recolectar" todos los pagos pendientes.
+    // Usamos un HashMap<PlayerID, HashMap<Material, Cantidad>>
+    // (Ej: { Player1: {Wood: 2, Brick: 1}, Player2: {Sheep: 1} })
+    let mut payouts: HashMap<PlayerType, HashMap<MaterialType, u8>> = HashMap::new();
+
+    // Iteramos sobre todas las casillas del tablero (inmutable)
+    for tile in board.tiles.iter() {
+        
+        // Si la casilla coincide con la tirada Y NO tiene el ladrón
+        if tile.number == number_rolled && !tile.has_robber {
+            
+            let material = tile.material;
+            
+            // Itera sobre los 6 vértices de esta casilla productora
+            for &vertex_id in &tile.vertices {
+                
+                // Comprueba si el vértice tiene un dueño y un edificio
+                if let Some(owner_id) = board.vertices[vertex_id].owner {
+                    if let Some(building) = board.vertices[vertex_id].building {
+                        
+                        // Determina cuánto pagar (1 por asentamiento, 2 por ciudad)
+                        let amount = match building {
+                            BuildingType::Settlement => 1,
+                            BuildingType::City => 2,
+                        };
+
+                        // Añade este pago a nuestra lista de recolección
+                        let player_payout = payouts.entry(owner_id).or_insert(HashMap::new());
+                        let material_count = player_payout.entry(material).or_insert(0);
+                        *material_count += amount;
+                    }
+                }
+            }
+        }
+    }
+
+    // ---
+    // Paso 2: "Aplicar" los pagos a los jugadores (mutable)
+    // ---
+    if payouts.is_empty() {
+        println!("Tirada {}: Ninguna casilla produjo recursos.", number_rolled);
+        return;
+    }
+    
+    println!("Tirada {}: ¡Repartiendo recursos!", number_rolled);
+
+    // Iteramos sobre los jugadores del tablero (mutable)
+    for player in board.players.iter_mut() {
+        
+        // ¿Este jugador tiene pagos pendientes en nuestra lista?
+        if let Some(gains) = payouts.get(&player.id) {
+            
+            for (&material, &amount) in gains {
+                let resource_count = player.resources.entry(material).or_insert(0);
+                *resource_count += amount;
+                
+                println!("- {:?} recibe {} de {:?}", player.id, amount, material);
+            }
+        }
+    }
+}
+
+/**
+ * Otorga los recursos iniciales a UN jugador.
+ *
+ * Esta función se llama para la *segunda* casa que coloca
+ * un jugador durante la fundación. Le da 1 recurso por cada
+ * casilla adyacente a `settlement_pos`.
+ */
+pub fn give_starting_resources(
+    board: &mut Board, 
+    player_id: PlayerType, 
+    settlement_pos: VertexId
+) {
+    
+    // Paso 1: "Recolectar" los materiales (inmutable)
+    let mut resources_to_gain: Vec<MaterialType> = Vec::new();
+
+    // Obtenemos los 'adjacent_tiles' del vértice donde se colocó la casa
+    for &tile_id in &board.vertices[settlement_pos].adjacent_tiles {
+        
+        let tile = &board.tiles[tile_id];
+        
+        // No se obtienen recursos del desierto
+        if tile.material != MaterialType::Dessert {
+            resources_to_gain.push(tile.material);
+        }
+    }
+
+    // ---
+    // Paso 2: "Aplicar" los recursos al jugador (mutable)
+    // ---
+
+    // Encontramos al jugador
+    let player = match board.players.iter_mut().find(|p| p.id == player_id) {
+        Some(p) => p,
+        None => {
+            println!("Error: No se encontró al jugador {:?} para darle sus recursos.", player_id);
+            return;
+        }
+    };
+    
+    println!("Dando recursos iniciales a {:?}:", player_id);
+
+    // Añadimos 1 de cada recurso recolectado
+    for material in resources_to_gain {
+        let resource_count = player.resources.entry(material).or_insert(0);
+        *resource_count += 1;
+        println!("- 1 de {:?}", material);
+    }
+}
+
+/**
+ * Realiza un intercambio de recursos con el banco (la banca).
+ * Devuelve `true` si el intercambio fue exitoso, `false` si no.
+ */
+pub fn trade_with_bank(
+    board: &mut Board,
+    player_id: PlayerType,
+    material_to_give: MaterialType,
+    material_to_get: MaterialType
+) -> bool {
+    
+    // --- 1. Chequeos Preliminares ---
+    if material_to_give == material_to_get {
+        println!("Error de intercambio: No puedes intercambiar un material por sí mismo.");
+        return false;
+    }
+    
+    // El desierto no es un recurso comerciable
+    if material_to_give == MaterialType::Dessert || material_to_get == MaterialType::Dessert {
+        println!("Error de intercambio: No se puede comerciar con el Desierto.");
+        return false;
+    }
+
+    // --- 2. Encontrar al Jugador y Determinar la Tasa ---
+
+    // Paso A: Encontrar el ÍNDICE del jugador
+    let player_index = match board.players.iter().position(|p| p.id == player_id) {
+        Some(index) => index,
+        None => {
+            println!("Error: No se encontró al jugador {:?}", player_id);
+            return false;
+        }
+    };
+
+    let player = &board.players[player_index]; // Referencia inmutable por ahora
+    let mut required_to_give = 4; // Tasa por defecto 4:1
+
+    // Paso B: Chequear si tiene un puerto 2:1 específico
+    let has_specific_port = 
+        (material_to_give == MaterialType::Wheat && player.power_ups.contains(&PowerUp::Wheat2)) ||
+        (material_to_give == MaterialType::Brick && player.power_ups.contains(&PowerUp::Brick2)) ||
+        (material_to_give == MaterialType::Stone && player.power_ups.contains(&PowerUp::Stone2)) ||
+        (material_to_give == MaterialType::Sheep && player.power_ups.contains(&PowerUp::Sheep2)) ||
+        (material_to_give == MaterialType::Wood  && player.power_ups.contains(&PowerUp::Wood2));
+    
+    if has_specific_port {
+        required_to_give = 2;
+    // Paso C: Si no, chequear si tiene un puerto genérico 3:1
+    } else if player.power_ups.contains(&PowerUp::Any3) {
+        required_to_give = 3;
+    }
+    // Si no, `required_to_give` se mantiene en 4.
+
+    // --- 3. Chequear si el Jugador Tiene Recursos Suficientes ---
+    
+    let current_resource_count = player.resources.get(&material_to_give).unwrap_or(&0);
+    
+    if *current_resource_count < required_to_give {
+        println!(
+            "Error de intercambio: {:?} necesita {} de {:?} pero solo tiene {}.",
+            player_id, required_to_give, material_to_give, *current_resource_count
+        );
+        return false;
+    }
+
+    // --- 4. Ejecutar el Intercambio ---
+    
+    // ¡Todos los chequeos pasaron! Ahora obtenemos al jugador mutable.
+    let player = &mut board.players[player_index];
+
+    // 1. Quitar el material pagado
+    let give_count = player.resources.get_mut(&material_to_give).unwrap();
+    *give_count -= required_to_give;
+
+    // 2. Añadir el material recibido
+    let get_count = player.resources.entry(material_to_get).or_insert(0);
+    *get_count += 1;
+
+    println!(
+        "¡Intercambio exitoso! {:?} entregó {} de {:?} y recibió 1 de {:?}.",
+        player_id, required_to_give, material_to_give, material_to_get
+    );
+    true
+}
 /**
  * Intenta comprar una carta de desarrollo para un jugador.
  * Devuelve `Some(DevelopmentCard)` si la compra fue exitosa.
@@ -483,10 +689,20 @@ pub fn place_house (board: &mut Board, player_id_type: PlayerType, position: Ver
     board.vertices[position].owner = Some(player_id_type);
     board.vertices[position].building = Some(BuildingType::Settlement{});
     
+    let acquired_power_up = board.vertices[position].power_up;
+
     // --- 6. Actualizar al Jugador ---
     let player = &mut board.players[player_index];
     player.settlement_quantity -= 1;
     player.victory_points += 1;
+
+    if let Some(power_up) = acquired_power_up {
+        // Evita añadir el mismo puerto varias veces
+        if !player.power_ups.contains(&power_up) {
+            player.power_ups.push(power_up);
+            println!("¡{:?} ha conseguido un nuevo puerto: {:?}!", player.id, power_up);
+        }
+    }
 
     // ¡Gastar recursos si no es el primer turno! (¡NUEVO!)
     if !is_first_turn {

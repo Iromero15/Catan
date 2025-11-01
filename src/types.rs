@@ -6,7 +6,7 @@ pub type PlayerID = usize;
 
 use std::collections::HashMap;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PlayerType {
     Player1,
     Player2,
