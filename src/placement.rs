@@ -1,6 +1,120 @@
 use crate::types::*;
 use rand::prelude::*;
+// --- CONSTANTES DE COSTO ---
+const SETTLEMENT_COST: &[(MaterialType, u8)] = &[
+    (MaterialType::Brick, 1),
+    (MaterialType::Wood, 1),
+    (MaterialType::Sheep, 1),
+    (MaterialType::Wheat, 1),
+];
 
+const ROAD_COST: &[(MaterialType, u8)] = &[
+    (MaterialType::Brick, 1),
+    (MaterialType::Wood, 1),
+];
+
+const CITY_COST: &[(MaterialType, u8)] = &[
+    (MaterialType::Wheat, 2),
+    (MaterialType::Stone, 3), // Asumo que Stone es tu "mineral"
+];
+// --- CONSTANTE DE COSTO ---
+const DEVELOPMENT_CARD_COST: &[(MaterialType, u8)] = &[
+    (MaterialType::Sheep, 1),
+    (MaterialType::Wheat, 1),
+    (MaterialType::Stone, 1), // Asumo que Stone es tu "mineral"
+];
+
+/**
+ * Intenta comprar una carta de desarrollo para un jugador.
+ * Devuelve `Some(DevelopmentCard)` si la compra fue exitosa.
+ * Devuelve `None` si el jugador no tenía recursos o si el mazo está vacío.
+ */
+pub fn buy_development_card(
+    board: &mut Board, 
+    player_id_type: PlayerType
+) -> Option<DevelopmentCard> {
+    
+    // --- 1. Chequeos (Solo Lectura) ---
+
+    // Paso A: Encontrar el ÍNDICE del jugador
+    let player_index = match board.players.iter().position(|p| p.id == player_id_type) {
+        Some(index) => index,
+        None => {
+            println!("Error: No se encontró al jugador {:?}", player_id_type);
+            return None;
+        }
+    };
+
+    // Paso B: Chequear si el mazo tiene cartas
+    if board.development_cards.is_empty() {
+        println!("No se puede comprar: ¡El mazo de cartas de desarrollo está vacío!");
+        return None;
+    }
+
+    // Paso C: Chequear si el jugador tiene los recursos
+    if !has_resources(&board.players[player_index], DEVELOPMENT_CARD_COST) {
+        println!("No se puede comprar: {:?} no tiene los recursos necesarios (1 oveja, 1 trigo, 1 mineral/piedra).", player_id_type);
+        return None;
+    }
+
+    // --- 2. Ejecutar la Compra (Modificaciones) ---
+    // (Lo hacemos en dos pasos para evitar el 'borrow checker')
+
+    // Paso A: Sacar la carta del mazo (Préstamo mutable 1)
+    // Usamos .pop() para tomar la carta de arriba (la última del Vec)
+    // Sabemos que no está vacío por el chequeo de arriba, así que .unwrap() es seguro.
+    let card_drawn = board.development_cards.pop().unwrap();
+    println!("¡{:?} ha comprado una carta de desarrollo!", player_id_type);
+
+    // Paso B: Modificar al jugador (Préstamo mutable 2)
+    let player = &mut board.players[player_index];
+    
+    // 1. Gastar recursos
+    spend_resources(player, DEVELOPMENT_CARD_COST);
+    
+    // 2. Añadir la carta a la mano del jugador
+    player.dev_cards.push(card_drawn);
+
+    // (Opcional: si es un Punto de Victoria, se podría
+    // registrar de inmediato, aunque las reglas dicen
+    // que se mantienen en secreto)
+    if card_drawn == DevelopmentCard::VictoryPoint {
+        println!("¡La carta era un Punto de Victoria!");
+        // player.victory_points += 1; // (Decide si quieres que sea automático)
+    }
+
+    // Devolvemos la carta comprada para que el juego sepa qué pasó
+    Some(card_drawn)
+}
+/**
+ * Comprueba si un jugador tiene suficientes recursos,
+ * sin modificar nada.
+ */
+fn has_resources(player: &Player, cost: &[(MaterialType, u8)]) -> bool {
+    for &(material, required_count) in cost {
+        // Usa .get() y .unwrap_or(&0) para manejar el caso
+        // en que el jugador tenga 0 de ese recurso (sin clave).
+        let current_count = player.resources.get(&material).unwrap_or(&0);
+        if *current_count < required_count {
+            return false; // No tiene suficiente
+        }
+    }
+    true // Tiene todo lo necesario
+}
+
+/**
+ * Gasta los recursos del jugador.
+ * IMPORTANTE: ¡Llama a `has_resources` *primero* para evitar un pánico!
+ */
+fn spend_resources(player: &mut Player, cost: &[(MaterialType, u8)]) {
+    for &(material, required_count) in cost {
+        // Aquí sí usamos .get_mut() y .unwrap() porque asumimos
+        // que `has_resources` ya confirmó que la cantidad es suficiente.
+        let current_count = player.resources.get_mut(&material)
+            .expect("Error: Se intentó gastar un recurso que no existía o no era suficiente.");
+        *current_count -= required_count;
+    }
+}
 /**
  * Mueve el ladrón a una nueva casilla y roba 1 recurso a un
  * jugador adyacente (si es posible).
@@ -115,10 +229,10 @@ pub fn place_road (
     board: &mut Board, 
     player_id_type: PlayerType, 
     edge_position: EdgeId,
-    turn_phase: TurnPhase  // <-- ¡Parámetro modificado!
+    turn_phase: TurnPhase
 ) {
     
-    // --- 1. Chequeo de Inventario y Ocupación (Solo Lectura) ---
+    // --- 1. Chequeo de Inventario, Ocupación y Recursos ---
 
     // Paso A: Encontrar el ÍNDICE del jugador
     let player_index = match board.players.iter().position(|p| p.id == player_id_type) {
@@ -141,19 +255,19 @@ pub fn place_road (
         return;
     }
 
-    // --- 2. Chequeo de Conexión (¡LÓGICA MODIFICADA!) ---
-    
+    // Paso D: Chequear Recursos (¡NUEVO!)
+    if let TurnPhase::Normal = turn_phase {
+        if !has_resources(&board.players[player_index], ROAD_COST) {
+            println!("No se puede construir: {:?} no tiene los recursos necesarios (1 ladrillo, 1 madera).", player_id_type);
+            return;
+        }
+    }
+
+    // --- 2. Chequeo de Conexión ---
     let is_connected = match turn_phase {
-        
-        // Caso A: Turno Normal
-        // Usa la función de chequeo de red completa que ya teníamos.
         TurnPhase::Normal => {
             is_road_connectable(board, player_id_type, edge_position)
         }
-        
-        // Caso B: Turno de Fundación
-        // Usa una nueva función que solo comprueba si el borde
-        // toca el 'anchor_vertex' (la casa recién puesta).
         TurnPhase::Setup { anchor_vertex } => {
             is_road_adjacent_to_vertex(board, edge_position, anchor_vertex)
         }
@@ -171,7 +285,15 @@ pub fn place_road (
     let player = &mut board.players[player_index];
     player.road_quantity -= 1;
 
-    println!("¡Camino construido con éxito en {} para {:?}!", edge_position, player_id_type);
+    // ¡Gastar recursos si es turno normal! (¡NUEVO!)
+    if let TurnPhase::Normal = turn_phase {
+        spend_resources(player, ROAD_COST);
+        println!("¡Camino construido con éxito en {} para {:?}! (Recursos gastados)", edge_position, player_id_type);
+    } else {
+        println!("¡Camino construido con éxito en {} para {:?}! (Turno de fundación)", edge_position, player_id_type);
+    }
+    
+    println!("A {:?} le quedan {} caminos.", player.id, player.road_quantity);
 }
 
 /**
@@ -245,15 +367,14 @@ fn is_road_connectable(board: &Board, player_id: PlayerType, edge_id: EdgeId) ->
 pub fn place_city (board: &mut Board, player_id_type: PlayerType, position: VertexId) {
     
     // --- 1. Chequeo de Propiedad ---
-    // ¿Tiene este jugador un ASENTAMIENTO en esta posición?
     if !is_settlement_owned_by(board, player_id_type, position) {
         println!("No se puede construir: {:?} no posee un asentamiento en {}.", player_id_type, position);
         return;
     }
 
-    // --- 2. Chequeo de Inventario (Evitando el Borrow Checker) ---
+    // --- 2. Chequeo de Inventario y Recursos ---
 
-    // Paso A: Encontrar el ÍNDICE del jugador (solo lectura)
+    // Paso A: Encontrar el ÍNDICE del jugador
     let player_index = match board.players.iter().position(|p| p.id == player_id_type) {
         Some(index) => index,
         None => {
@@ -262,24 +383,30 @@ pub fn place_city (board: &mut Board, player_id_type: PlayerType, position: Vert
         }
     };
 
-    // Paso B: Chequear el inventario usando el índice (solo lectura)
+    // Paso B: Chequear el inventario de piezas
     if board.players[player_index].city_quantity == 0 {
         println!("No se puede construir: {:?} no tiene más ciudades disponibles.", player_id_type);
         return;
     }
 
+    // Paso C: Chequear Recursos (¡NUEVO!)
+    if !has_resources(&board.players[player_index], CITY_COST) {
+        println!("No se puede construir: {:?} no tiene los recursos necesarios (3 mineral/piedra, 2 trigo).", player_id_type);
+        return;
+    }
+
     // --- 3. Modificar el Tablero ---
-    // (Inicia el primer préstamo mutable)
     board.vertices[position].building = Some(BuildingType::City);
-    // (Termina el primer préstamo mutable)
 
     // --- 4. Modificar al Jugador ---
-    // (Inicia el segundo préstamo mutable, ¡totalmente legal!)
     let player = &mut board.players[player_index];
     
     player.city_quantity -= 1;       // Gasta una pieza de ciudad
     player.settlement_quantity += 1; // Recupera la pieza de asentamiento
     player.victory_points += 1;      // Gana 1 VP (de 1 a 2)
+
+    // ¡Gastar recursos! (¡NUEVO!)
+    spend_resources(player, CITY_COST);
 
     println!("¡Ciudad construida con éxito en {} para {:?}!", position, player_id_type);
     println!("A {:?} le quedan {} ciudades y tiene {} puntos.", player.id, player.city_quantity, player.victory_points);
@@ -316,19 +443,9 @@ pub fn place_house (board: &mut Board, player_id_type: PlayerType, position: Ver
     if !can_place_house(board, position) {
         return;
     }
-
-    // --- 2. Chequeo de Regla de Conexión (Turno Normal) ---
-    if !is_first_turn {
-        if !has_road_connected(board, player_id_type, position) {
-            println!("No se puede construir en {}: No tienes un camino conectado a este vértice.", position);
-            return;
-        }
-    }
     
-    // --- 3. Chequeo de Inventario (¡MODIFICADO!) ---
-    
-    // *Paso A: Encontrar el ÍNDICE del jugador*
-    // `position()` solo necesita un préstamo INMUTABLE (&board), por lo que no hay conflicto.
+    // --- 2. Encontrar el ÍNDICE del jugador ---
+    // (Movido hacia arriba, es necesario para todos los chequeos)
     let player_index = match board.players.iter().position(|p| p.id == player_id_type) {
         Some(index) => index,
         None => {
@@ -336,30 +453,49 @@ pub fn place_house (board: &mut Board, player_id_type: PlayerType, position: Ver
             return;
         }
     };
-
-    // *Paso B: Chequear el inventario (todavía inmutable)*
+    
+    // --- 3. Chequeos Específicos del Turno ---
+    if is_first_turn {
+        // Es el primer turno. No se requieren recursos ni camino.
+    } else {
+        // Es un turno normal.
+        
+        // Chequeo A: ¿Tiene camino conectado?
+        if !has_road_connected(board, player_id_type, position) {
+            println!("No se puede construir en {}: No tienes un camino conectado a este vértice.", position);
+            return;
+        }
+        
+        // Chequeo B: ¿Tiene los recursos? (¡NUEVO!)
+        if !has_resources(&board.players[player_index], SETTLEMENT_COST) {
+            println!("No se puede construir: {:?} no tiene los recursos necesarios (1 ladrillo, 1 madera, 1 oveja, 1 trigo).", player_id_type);
+            return;
+        }
+    }
+    
+    // --- 4. Chequeo de Inventario ---
     if board.players[player_index].settlement_quantity == 0 {
         println!("No se puede construir: {:?} no tiene más asentamientos disponibles.", player_id_type);
         return;
     }
 
-    // --- 4. Colocar la Casa (En el Tablero) ---
-    // *Aquí comienza el PRIMER préstamo mutable.*
-    // Afecta a `board.vertices`.
+    // --- 5. Colocar la Casa (En el Tablero) ---
     board.vertices[position].owner = Some(player_id_type);
     board.vertices[position].building = Some(BuildingType::Settlement{});
-    // *El préstamo mutable a `board.vertices` TERMINA aquí.*
-
     
-    // --- 5. Actualizar al Jugador ---
-    // *Aquí comienza el SEGUNDO préstamo mutable.*
-    // Afecta a `board.players`.
-    // Como el préstamo anterior ya terminó, ¡esto es 100% legal!
+    // --- 6. Actualizar al Jugador ---
     let player = &mut board.players[player_index];
     player.settlement_quantity -= 1;
     player.victory_points += 1;
 
-    println!("¡Casa ubicada con éxito en {} para {:?}!", position, player_id_type);
+    // ¡Gastar recursos si no es el primer turno! (¡NUEVO!)
+    if !is_first_turn {
+        spend_resources(player, SETTLEMENT_COST);
+        println!("¡Casa ubicada con éxito en {} para {:?}! (Recursos gastados)", position, player_id_type);
+    } else {
+        println!("¡Casa ubicada con éxito en {} para {:?}! (Turno de fundación)", position, player_id_type);
+    }
+    
     println!("A {:?} le quedan {} asentamientos y tiene {} puntos.", player.id, player.settlement_quantity, player.victory_points);
 }
 fn has_road_connected(board: &Board, player_id: PlayerType, position: VertexId) -> bool {
