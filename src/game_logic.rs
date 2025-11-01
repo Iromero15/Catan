@@ -1,6 +1,7 @@
 use crate::types::*;
 use rand::prelude::*;
 use std::collections::HashMap;
+use std::collections::HashSet;
 // --- CONSTANTES DE COSTO ---
 const SETTLEMENT_COST: &[(MaterialType, u8)] = &[
     (MaterialType::Brick, 1),
@@ -25,6 +26,66 @@ const DEVELOPMENT_CARD_COST: &[(MaterialType, u8)] = &[
     (MaterialType::Stone, 1), // Asumo que Stone es tu "mineral"
 ];
 
+/**
+ * Comprueba si algún jugador ha alcanzado 10 o más
+ * puntos de victoria.
+ *
+ * Devuelve `Some(PlayerType)` si hay un ganador,
+ * si no, devuelve `None`.
+ */
+pub fn check_for_winner(board: &Board) -> Option<PlayerType> {
+    for player in &board.players {
+        if player.victory_points >= 10 {
+            println!("¡JUEGO TERMINADO! ¡El ganador es {:?}!", player.id);
+            return Some(player.id);
+        }
+    }
+    None
+}
+/**
+ * (Privada) Actualiza el estado de "Mayor Ejército".
+ * Se llama cada vez que un jugador juega un Caballero.
+ * Devuelve un ganador si esta acción provoca una victoria.
+ */
+pub fn update_largest_army(board: &mut Board, player_id: PlayerType) -> Option<PlayerType> {
+    
+    let player_index = board.players.iter().position(|p| p.id == player_id).unwrap();
+    let knights_played = board.players[player_index].knights_played;
+
+    // Regla 1: Debe tener al menos 3 caballeros.
+    // Regla 2: Debe tener más que el poseedor actual.
+    if knights_played >= 3 && knights_played > board.largest_army_size {
+        
+        // Comprobar si el jugador ya lo tiene
+        if board.largest_army == Some(player_id) {
+            board.largest_army_size = knights_played; // Solo actualiza el tamaño
+            return None; // Sin cambio de VP, sin ganador
+        }
+
+        println!("¡{:?} reclama el Mayor Ejército con {} caballeros!", player_id, knights_played);
+
+        // Quitar 2 VP al poseedor anterior (si existe)
+        if let Some(old_holder_id) = board.largest_army {
+            let old_holder = board.players.iter_mut().find(|p| p.id == old_holder_id).unwrap();
+            old_holder.victory_points -= 2;
+            println!("- {:?} pierde 2 VP.", old_holder.id);
+        }
+
+        // Dar 2 VP al nuevo poseedor
+        let new_holder = &mut board.players[player_index];
+        new_holder.victory_points += 2;
+        println!("- {:?} gana 2 VP.", new_holder.id);
+
+        // Actualizar el tablero
+        board.largest_army = Some(player_id);
+        board.largest_army_size = knights_played;
+
+        // Devolvemos si esto causó una victoria
+        return check_for_winner(board);
+    }
+    
+    None // No hubo cambios o no hubo ganador
+}
 /**
  * Otorga recursos a TODOS los jugadores basado en una tirada de dado.
  *
@@ -286,7 +347,8 @@ pub fn buy_development_card(
     // que se mantienen en secreto)
     if card_drawn == DevelopmentCard::VictoryPoint {
         println!("¡La carta era un Punto de Victoria!");
-        // player.victory_points += 1; // (Decide si quieres que sea automático)
+        player.victory_points += 1; // (Decide si quieres que sea automático)
+        check_for_winner(board);
     }
 
     // Devolvemos la carta comprada para que el juego sepa qué pasó
@@ -436,7 +498,7 @@ pub fn place_road (
     player_id_type: PlayerType, 
     edge_position: EdgeId,
     turn_phase: TurnPhase
-) {
+) -> Option<PlayerType>{
     
     // --- 1. Chequeo de Inventario, Ocupación y Recursos ---
 
@@ -445,33 +507,35 @@ pub fn place_road (
         Some(index) => index,
         None => {
             println!("Error: No se encontró al jugador {:?}", player_id_type);
-            return;
+            return None;
         }
     };
 
     // Paso B: Chequear el inventario
     if board.players[player_index].road_quantity == 0 {
         println!("No se puede construir: {:?} no tiene más caminos disponibles.", player_id_type);
-        return;
+        return None;
     }
 
     // Paso C: Chequear si el borde está vacío
     if board.edges[edge_position].owner.is_some() {
         println!("No se puede construir: El borde {} ya está ocupado.", edge_position);
-        return;
+        return None;
     }
 
     // Paso D: Chequear Recursos (¡NUEVO!)
-    if let TurnPhase::Normal = turn_phase {
+    if let TurnPhase::Normal = turn_phase { // <-- SÓLO chequear en Turno Normal
         if !has_resources(&board.players[player_index], ROAD_COST) {
-            println!("No se puede construir: {:?} no tiene los recursos necesarios (1 ladrillo, 1 madera).", player_id_type);
-            return;
+            println!("No se puede construir: {:?} no tiene los recursos necesarios.", player_id_type);
+            return None;
         }
     }
 
     // --- 2. Chequeo de Conexión ---
     let is_connected = match turn_phase {
-        TurnPhase::Normal => {
+        
+        TurnPhase::Normal | TurnPhase::FreeRoad => { // <-- MODIFICADO
+            // En turno normal o con carta, usar la conexión de red
             is_road_connectable(board, player_id_type, edge_position)
         }
         TurnPhase::Setup { anchor_vertex } => {
@@ -481,25 +545,28 @@ pub fn place_road (
 
     if !is_connected {
         println!("No se puede construir: El camino no está conectado correctamente (Fase: {:?}).", turn_phase);
-        return;
+        return None;
     }
     
     // --- 3. Modificar el Tablero ---
     board.edges[edge_position].owner = Some(player_id_type);
 
     // --- 4. Modificar al Jugador ---
-    let player = &mut board.players[player_index];
+    // ¡Gastar recursos si es turno normal! (¡NUEVO!)
+   let player = &mut board.players[player_index];
     player.road_quantity -= 1;
 
-    // ¡Gastar recursos si es turno normal! (¡NUEVO!)
-    if let TurnPhase::Normal = turn_phase {
+    // ¡Gastar recursos si es turno normal!
+    if let TurnPhase::Normal = turn_phase { // <-- MODIFICADO
         spend_resources(player, ROAD_COST);
-        println!("¡Camino construido con éxito en {} para {:?}! (Recursos gastados)", edge_position, player_id_type);
+        println!("¡Camino construido con éxito en {}! (Recursos gastados)", edge_position);
     } else {
-        println!("¡Camino construido con éxito en {} para {:?}! (Turno de fundación)", edge_position, player_id_type);
+        // Esto ahora cubre Setup Y FreeRoad
+        println!("¡Camino construido con éxito en {}! (Sin costo)", edge_position);
     }
     
     println!("A {:?} le quedan {} caminos.", player.id, player.road_quantity);
+    update_longest_road(board, player_id_type)
 }
 
 /**
@@ -524,7 +591,7 @@ fn is_road_adjacent_to_vertex(board: &Board, edge_id: EdgeId, vertex_id: VertexI
  * 1. Es propiedad del jugador (tiene un asentamiento/ciudad).
  * 2. O, ya está tocando OTRO camino propiedad del jugador.
  */
-fn is_road_connectable(board: &Board, player_id: PlayerType, edge_id: EdgeId) -> bool {
+pub fn is_road_connectable(board: &Board, player_id: PlayerType, edge_id: EdgeId) -> bool {
     
     // Obtenemos los dos vértices que define este borde
     let (v1, v2) = board.edges[edge_id].vertices;
@@ -570,12 +637,12 @@ fn is_road_connectable(board: &Board, player_id: PlayerType, edge_id: EdgeId) ->
 /**
  * Intenta reemplazar un Asentamiento existente por una Ciudad.
  */
-pub fn place_city (board: &mut Board, player_id_type: PlayerType, position: VertexId) {
+pub fn place_city (board: &mut Board, player_id_type: PlayerType, position: VertexId) -> Option<PlayerType>{
     
     // --- 1. Chequeo de Propiedad ---
     if !is_settlement_owned_by(board, player_id_type, position) {
         println!("No se puede construir: {:?} no posee un asentamiento en {}.", player_id_type, position);
-        return;
+        return None;
     }
 
     // --- 2. Chequeo de Inventario y Recursos ---
@@ -585,20 +652,20 @@ pub fn place_city (board: &mut Board, player_id_type: PlayerType, position: Vert
         Some(index) => index,
         None => {
             println!("Error: No se encontró al jugador {:?}", player_id_type);
-            return;
+            return None;
         }
     };
 
     // Paso B: Chequear el inventario de piezas
     if board.players[player_index].city_quantity == 0 {
         println!("No se puede construir: {:?} no tiene más ciudades disponibles.", player_id_type);
-        return;
+        return None;
     }
 
     // Paso C: Chequear Recursos (¡NUEVO!)
     if !has_resources(&board.players[player_index], CITY_COST) {
         println!("No se puede construir: {:?} no tiene los recursos necesarios (3 mineral/piedra, 2 trigo).", player_id_type);
-        return;
+        return None;
     }
 
     // --- 3. Modificar el Tablero ---
@@ -616,6 +683,7 @@ pub fn place_city (board: &mut Board, player_id_type: PlayerType, position: Vert
 
     println!("¡Ciudad construida con éxito en {} para {:?}!", position, player_id_type);
     println!("A {:?} le quedan {} ciudades y tiene {} puntos.", player.id, player.city_quantity, player.victory_points);
+    check_for_winner(board)
 }
 /**
  * Comprueba si un vértice contiene un Asentamiento (Settlement)
@@ -643,11 +711,11 @@ fn is_settlement_owned_by(board: &Board, player_id: PlayerType, position: Vertex
 }
 
 // Renombré 'player_id' a 'player_id_type' para mayor claridad
-pub fn place_house (board: &mut Board, player_id_type: PlayerType, position: VertexId, is_first_turn: bool) {
+pub fn place_house (board: &mut Board, player_id_type: PlayerType, position: VertexId, is_first_turn: bool) -> Option<PlayerType>{
     
     // --- 1. Chequeo de Regla de Distancia ---
     if !can_place_house(board, position) {
-        return;
+        return None;
     }
     
     // --- 2. Encontrar el ÍNDICE del jugador ---
@@ -656,7 +724,7 @@ pub fn place_house (board: &mut Board, player_id_type: PlayerType, position: Ver
         Some(index) => index,
         None => {
             println!("Error: No se encontró al jugador {:?}", player_id_type);
-            return;
+            return None;
         }
     };
     
@@ -669,20 +737,20 @@ pub fn place_house (board: &mut Board, player_id_type: PlayerType, position: Ver
         // Chequeo A: ¿Tiene camino conectado?
         if !has_road_connected(board, player_id_type, position) {
             println!("No se puede construir en {}: No tienes un camino conectado a este vértice.", position);
-            return;
+            return None;
         }
         
         // Chequeo B: ¿Tiene los recursos? (¡NUEVO!)
         if !has_resources(&board.players[player_index], SETTLEMENT_COST) {
             println!("No se puede construir: {:?} no tiene los recursos necesarios (1 ladrillo, 1 madera, 1 oveja, 1 trigo).", player_id_type);
-            return;
+            return None;
         }
     }
     
     // --- 4. Chequeo de Inventario ---
     if board.players[player_index].settlement_quantity == 0 {
         println!("No se puede construir: {:?} no tiene más asentamientos disponibles.", player_id_type);
-        return;
+        return None;
     }
 
     // --- 5. Colocar la Casa (En el Tablero) ---
@@ -713,6 +781,7 @@ pub fn place_house (board: &mut Board, player_id_type: PlayerType, position: Ver
     }
     
     println!("A {:?} le quedan {} asentamientos y tiene {} puntos.", player.id, player.settlement_quantity, player.victory_points);
+    check_for_winner(board)
 }
 fn has_road_connected(board: &Board, player_id: PlayerType, position: VertexId) -> bool {
     let pos: &Vertex = &board.vertices[position];
@@ -779,4 +848,117 @@ fn can_place_house(board: &Board, position: VertexId) -> bool {
 fn check_self_is_empty(board: &Board, position: VertexId) -> bool {
     let pos: &Vertex = &board.vertices[position];
     pos.owner.is_none()
+}
+/**
+ * (Privada) Recorre un camino para encontrar la longitud máxima
+ * desde un vértice inicial.
+ */
+fn find_path_length(
+    board: &Board,
+    player_id: PlayerType,
+    current_vertex: VertexId,
+    visited_edges: &mut HashSet<EdgeId>
+) -> u8 {
+    
+    let mut max_len = 0;
+
+    // Itera por todos los bordes que tocan el vértice actual
+    for &edge_id in &board.vertices[current_vertex].adjacent_edges {
+        
+        // Si el borde es del jugador Y no lo hemos visitado
+        if board.edges[edge_id].owner == Some(player_id) && !visited_edges.contains(&edge_id) {
+            
+            visited_edges.insert(edge_id); // Marcar como visitado
+
+            // Obtener el *otro* vértice del borde
+            let (v1, v2) = board.edges[edge_id].vertices;
+            let next_vertex = if v1 == current_vertex { v2 } else { v1 };
+
+            // ¡Regla clave! ¿El camino está bloqueado por otro jugador?
+            let is_blocked = board.vertices[next_vertex].owner.is_some() &&
+                             board.vertices[next_vertex].owner != Some(player_id);
+
+            let current_len = if is_blocked {
+                1 // El camino termina aquí, longitud 1
+            } else {
+                // Continuar recursivamente
+                1 + find_path_length(board, player_id, next_vertex, visited_edges)
+            };
+
+            if current_len > max_len {
+                max_len = current_len;
+            }
+            
+            visited_edges.remove(&edge_id); // Desmarcar (backtracking)
+        }
+    }
+    
+    max_len
+}
+
+/**
+ * (Privada) Calcula la longitud real del camino más largo
+ * de un jugador.
+ */
+fn calculate_player_longest_road(board: &Board, player_id: PlayerType) -> u8 {
+    let mut max_road = 0;
+    let mut visited_edges: HashSet<EdgeId> = HashSet::new();
+
+    // Iteramos por todos los vértices del tablero
+    for v_id in 0..board.vertices.len() {
+        // Solo iniciamos la búsqueda desde un vértice que
+        // pertenezca al jugador o esté vacío
+        if board.vertices[v_id].owner == Some(player_id) || 
+           board.vertices[v_id].owner.is_none() {
+            
+            let len = find_path_length(board, player_id, v_id, &mut visited_edges);
+            if len > max_road {
+                max_road = len;
+            }
+        }
+    }
+    max_road
+}
+
+/**
+ * (Pública) Actualiza el estado de "Camino Más Largo".
+ * Se llama cada vez que un jugador construye un camino.
+ * Devuelve un ganador si esta acción provoca una victoria.
+ */
+pub fn update_longest_road(board: &mut Board, player_id: PlayerType) -> Option<PlayerType> {
+    
+    let current_longest = calculate_player_longest_road(board, player_id);
+
+    // Regla 1: Debe ser al menos 5.
+    // Regla 2: Debe ser más largo que el poseedor actual.
+    if current_longest >= 5 && current_longest > board.longest_road_size {
+        
+        // Comprobar si el jugador ya lo tiene
+        if board.longest_road == Some(player_id) {
+            board.longest_road_size = current_longest; // Solo actualiza
+            return None; // Sin cambio de VP
+        }
+
+        println!("¡{:?} reclama el Camino Más Largo con {} segmentos!", player_id, current_longest);
+
+        // Quitar 2 VP al poseedor anterior
+        if let Some(old_holder_id) = board.longest_road {
+            let old_holder = board.players.iter_mut().find(|p| p.id == old_holder_id).unwrap();
+            old_holder.victory_points -= 2;
+            println!("- {:?} pierde 2 VP.", old_holder.id);
+        }
+
+        // Dar 2 VP al nuevo poseedor
+        let new_holder = board.players.iter_mut().find(|p| p.id == player_id).unwrap();
+        new_holder.victory_points += 2;
+        println!("- {:?} gana 2 VP.", new_holder.id);
+
+        // Actualizar el tablero
+        board.longest_road = Some(player_id);
+        board.longest_road_size = current_longest;
+        
+        return check_for_winner(board);
+    }
+    
+    None // No hubo cambios o no hubo ganador
 }

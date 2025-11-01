@@ -205,7 +205,17 @@ pub fn setup_board() -> Board {
 
     // --- ¡Listo! ---
     // Devolvemos el tablero completamente instanciado y conectado.
-    Board { vertices, tiles, edges, players , development_cards: development_cards.to_vec() }
+    Board { 
+    vertices, 
+    tiles, 
+    edges, 
+    players, 
+    development_cards: development_cards.to_vec(),
+    largest_army: None,
+    largest_army_size: 2, // Se necesita > 2 (o sea, 3) para reclamarlo
+    longest_road: None,
+    longest_road_size: 4, // Se necesita > 4 (o sea, 5) para reclamarlo
+    }
 }
 
 pub fn add_player(board: &mut Board) -> Option<PlayerType> {

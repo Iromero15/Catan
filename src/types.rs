@@ -18,8 +18,8 @@ pub enum PlayerType {
 pub enum TurnPhase {
 
     Setup { anchor_vertex: VertexId },
-
     Normal,
+    FreeRoad,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -87,6 +87,8 @@ pub struct Player {
     pub power_ups: Vec<PowerUp>, 
     pub victory_points: u8,
     pub dev_cards: Vec<DevelopmentCard>,
+    pub knights_played: u8,
+    pub played_dev_card_this_turn: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -96,6 +98,10 @@ pub struct Board {
     pub edges: Vec<Edge>,
     pub players: Vec<Player>,
     pub development_cards: Vec<DevelopmentCard>,
+    pub largest_army: Option<PlayerType>,
+    pub largest_army_size: u8,
+    pub longest_road: Option<PlayerType>,
+    pub longest_road_size: u8,
 }
 impl Player {
     pub fn new(id: PlayerType) -> Self {
@@ -108,6 +114,8 @@ impl Player {
             road_quantity: 15,
             victory_points: 0,
             dev_cards: Vec::new(),
+            knights_played: 0,
+            played_dev_card_this_turn: false,
         }
     }
 }

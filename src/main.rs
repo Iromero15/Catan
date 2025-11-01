@@ -1,12 +1,13 @@
 mod types;
 mod setup;
-mod placement;
+mod game_logic;
 mod control;
+mod development_cards;
 // use std::collections::HashSet;
 // use rand::seq::SliceRandom;
 // use rand::thread_rng;
 use crate::setup::*;
-use crate::placement::*;
+use crate::game_logic::*;
 
 
     
