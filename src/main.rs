@@ -5,10 +5,9 @@ mod control;
 // use std::collections::HashSet;
 // use rand::seq::SliceRandom;
 // use rand::thread_rng;
-use crate::types::*;
 use crate::setup::*;
 use crate::placement::*;
-use crate::control::*;
+
 
     
 

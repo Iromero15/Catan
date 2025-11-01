@@ -19,12 +19,9 @@ pub enum PlayerType {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TurnPhase {
-    // Turno de fundación (1ro y 2do turno)
-    // Debe construir junto al vértice especificado.
+
     Setup { anchor_vertex: VertexId },
-    
-    // Turno normal
-    // Las reglas de conexión estándar aplican.
+
     Normal,
 }
 
@@ -53,7 +50,14 @@ pub enum MaterialType {
     Wood,
     Dessert,
 }
-
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DevelopmentCard {
+    Knight,
+    RoadBuilding,
+    YearOfPlenty,
+    Monopoly,
+    VictoryPoint,
+}
 #[derive(Debug, Clone)]
 pub struct Vertex {
     pub owner: Option<PlayerType>,
@@ -68,6 +72,7 @@ pub struct Tile {
     pub material: MaterialType,
     pub number: u8, 
     pub vertices: [VertexId; 6], 
+    pub has_robber: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -97,7 +102,7 @@ pub struct Player {
     pub victory_points: u8,
 
     // (Opcional) Cartas de desarrollo que tiene en la mano
-    // pub dev_cards: Vec<DevelopmentCard>,
+    dev_cards: Vec<DevelopmentCard>,
 }
 
 #[derive(Debug, Clone)]
@@ -106,6 +111,7 @@ pub struct Board {
     pub tiles: Vec<Tile>,
     pub edges: Vec<Edge>,
     pub players: Vec<Player>,
+    pub development_cards: Vec<DevelopmentCard>,
 }
 impl Player {
     /**
@@ -124,6 +130,7 @@ impl Player {
             resources: HashMap::new(), 
             road_quantity: 15,
             victory_points: 0,
+            dev_cards: Vec::new(),
         }
     }
 }

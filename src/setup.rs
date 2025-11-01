@@ -10,7 +10,7 @@ pub fn setup_board() -> Board {
     let mut vertices = Vec::new();
     let mut tiles = Vec::new();
     let mut edges = Vec::new();
-    let mut players = Vec::new();
+    let players = Vec::new();
 
     // --- Paso 1: Instanciar todos los vértices ---
     // Creamos 54 vértices vacíos, basados en tu mapa (1-54).
@@ -62,6 +62,7 @@ pub fn setup_board() -> Board {
             material: MaterialType::Dessert, // Temporal
             number: 0,                       // Temporal
             vertices: [0; 6],                // Temporal
+            has_robber: false,
         });
     }
 
@@ -164,9 +165,27 @@ pub fn setup_board() -> Board {
     let tile_numbers = [
         5, 2, 6, 10, 9, 4, 3, 8, 11, 5, 8, 4, 11, 12, 9, 6, 3, 10,
     ]; // Total: 18 fichas de número
+    
+    let mut development_cards = [
+        DevelopmentCard::Knight, DevelopmentCard::Knight,
+        DevelopmentCard::Knight, DevelopmentCard::Knight,
+        DevelopmentCard::Knight, DevelopmentCard::Knight,
+        DevelopmentCard::Knight, DevelopmentCard::Knight,
+        DevelopmentCard::Knight, DevelopmentCard::Knight,
+        DevelopmentCard::Knight, DevelopmentCard::Knight,
+        DevelopmentCard::Knight, DevelopmentCard::Knight,
+        DevelopmentCard::Monopoly, DevelopmentCard::Monopoly,
+        DevelopmentCard::RoadBuilding, DevelopmentCard::RoadBuilding,
+        DevelopmentCard::YearOfPlenty, DevelopmentCard::YearOfPlenty,
+        DevelopmentCard::VictoryPoint, DevelopmentCard::VictoryPoint, 
+        DevelopmentCard::VictoryPoint, DevelopmentCard::VictoryPoint, 
+        DevelopmentCard::VictoryPoint, DevelopmentCard::VictoryPoint, 
+        DevelopmentCard::VictoryPoint,
+    ];
 
-    let mut rng = thread_rng();
+    let mut rng = rand::thread_rng();
     tile_materials.shuffle(&mut rng);
+    development_cards.shuffle(&mut rng);
 
     let mut number_index = 0;
 
@@ -176,6 +195,7 @@ pub fn setup_board() -> Board {
 
         if material == MaterialType::Dessert {
             tiles[i].number = 0;
+            tiles[i].has_robber = true;
         } else {
             // Si no es desierto, le toca el siguiente número de la lista
             tiles[i].number = tile_numbers[number_index];
@@ -185,7 +205,7 @@ pub fn setup_board() -> Board {
 
     // --- ¡Listo! ---
     // Devolvemos el tablero completamente instanciado y conectado.
-    Board { vertices, tiles, edges, players }
+    Board { vertices, tiles, edges, players , development_cards: development_cards.to_vec() }
 }
 
 pub fn add_player(board: &mut Board) -> Option<PlayerType> {

@@ -1,9 +1,112 @@
 use crate::types::*;
+use rand::prelude::*;
 
 /**
- * Intenta colocar un camino (Road) en un borde.
- * (Esta función asume que NO es el turno de fundación inicial)
+ * Mueve el ladrón a una nueva casilla y roba 1 recurso a un
+ * jugador adyacente (si es posible).
  */
+pub fn place_robber (
+    board: &mut Board,
+    player_id_type: PlayerType, // El jugador que MUEVE el ladrón
+    new_tile_pos: TileId,       // A dónde lo mueve (¡Corregido a TileId!)
+    player_to_rob_id: PlayerType // A quién elige robar
+) {
+    
+    // --- 1. Encontrar el ladrón actual ---
+    let current_robber_index = match board.tiles.iter().position(|t| t.has_robber) {
+        Some(index) => index,
+        None => {
+            println!("Error crítico: ¡El ladrón no está en el tablero! (Debería inicializarse en el desierto)");
+            return;
+        }
+    };
+
+    // --- 2. Chequeo de Reglas (Solo Lectura) ---
+
+    // Regla 1: No se puede mover al mismo lugar
+    if current_robber_index == new_tile_pos {
+        println!("No se puede mover: Debes mover el ladrón a una *nueva* casilla.");
+        return;
+    }
+
+    // Regla 2: El jugador a robar debe estar en la *nueva* casilla
+    let adjacent_players = get_players_adjacent_to_tile(board, new_tile_pos);
+    if !adjacent_players.contains(&player_to_rob_id) {
+        println!("No se puede robar: El jugador {:?} no tiene edificios en la casilla {}.", player_to_rob_id, new_tile_pos);
+        return;
+    }
+    
+    // Regla 3: No te puedes robar a ti mismo
+    if player_id_type == player_to_rob_id {
+        println!("No se puede robar: No puedes robarte a ti mismo.");
+        return;
+    }
+    
+    // --- 3. Mover el Ladrón (Modificación 1) ---
+    board.tiles[current_robber_index].has_robber = false;
+    board.tiles[new_tile_pos].has_robber = true;
+    println!("Ladrón movido de la casilla {} a la {}.", current_robber_index, new_tile_pos);
+
+    // --- 4. Ejecutar el Robo (Modificación 2) ---
+    
+    // Paso A: Encontrar índices para evitar el 'borrow checker'
+    let player_moving_index = board.players.iter().position(|p| p.id == player_id_type).unwrap();
+    let player_robbed_index = board.players.iter().position(|p| p.id == player_to_rob_id).unwrap();
+
+    // Paso B: Crear una lista de los recursos que el jugador tiene
+    let robbable_resources: Vec<MaterialType> = board.players[player_robbed_index]
+        .resources
+        .iter()
+        // Solo incluye materiales de los que tenga 1 o más
+        .filter(|(_, &count)| count > 0) 
+        .map(|(&material, _)| material) // Obtiene el tipo de material
+        .collect();
+
+    // Regla 4: Si no tiene cartas, no se roba nada.
+    if robbable_resources.is_empty() {
+        println!("¡El jugador {:?} no tiene cartas para robar!", player_to_rob_id);
+        return; // No roba nada, pero el movimiento es válido
+    }
+
+    // Paso C: Elegir un recurso al azar de la lista
+    let &resource_stolen = robbable_resources.choose(&mut rand::thread_rng()).unwrap();
+    println!("¡{:?} le roba 1 de {:?} a {:?}!", player_id_type, resource_stolen, player_to_rob_id);
+
+    // Paso D: Transferir el recurso (en dos bloques separados)
+    {
+        // Préstamo 1: Quitar recurso al robado
+        let player_robbed = &mut board.players[player_robbed_index];
+        *player_robbed.resources.get_mut(&resource_stolen).unwrap() -= 1;
+    }
+    {
+        // Préstamo 2: Dar recurso al que roba
+        let player_moving = &mut board.players[player_moving_index];
+        let resource_count = player_moving.resources.entry(resource_stolen).or_insert(0);
+        *resource_count += 1;
+    }
+}
+/**
+ * Devuelve un Vec con los PlayerType (únicos) de todos
+ * los jugadores que tienen edificios en los vértices de una casilla.
+ */
+fn get_players_adjacent_to_tile(board: &Board, tile_id: TileId) -> Vec<PlayerType> {
+    let mut players_on_tile = Vec::new();
+    let tile = &board.tiles[tile_id];
+
+    // Itera sobre los 6 vértices de la casilla
+    for &vertex_id in &tile.vertices {
+        
+        // Comprueba si el vértice tiene un dueño
+        if let Some(owner) = board.vertices[vertex_id].owner {
+            
+            // Si no hemos agregado a este jugador todavía, lo añadimos.
+            if !players_on_tile.contains(&owner) {
+                players_on_tile.push(owner);
+            }
+        }
+    }
+    players_on_tile
+}
 /**
  * Intenta colocar un camino (Road) en un borde.
  * Las reglas de conexión cambian según la fase del turno.
