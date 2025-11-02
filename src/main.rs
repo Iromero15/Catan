@@ -1,20 +1,24 @@
-// en src/main.rs
-
-// Declaración de todos tus módulos
+mod setup;           // tu setup.rs
 mod types;
-mod setup;
 mod game_logic;
 mod development_cards;
-mod terminal_game;
+mod visual_game;     // el que te dejo abajo
 
-// Usar lo que necesitas
-use crate::setup::setup_board;
-use crate::terminal_game::start_game;
+use bevy::prelude::*;
+use visual_game::VisualGamePlugin;
 
 fn main() {
-    // 1. Crea el tablero
-    let mut board = setup_board();
-    
-    // 2. Inicia el juego
-    start_game(&mut board);
+    App::new()
+        .add_plugins(
+            DefaultPlugins.set(WindowPlugin {
+                primary_window: Some(Window {
+                    title: "Catan en Bevy".to_string(),
+                    resolution: (1280., 720.).into(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })
+        )
+        .add_plugins(VisualGamePlugin)
+        .run();
 }
