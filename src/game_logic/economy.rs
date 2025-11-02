@@ -1,5 +1,5 @@
 // en src/game_logic/economy.rs
-
+use super::victory::check_for_winner;
 use crate::types::*;
 use rand::prelude::*;
 use std::collections::HashMap;
@@ -31,7 +31,7 @@ pub fn spend_resources(player: &mut Player, cost: &[(MaterialType, u8)]) {
     }
 }
 
-fn get_players_adjacent_to_tile(board: &Board, tile_id: TileId) -> Vec<PlayerType> {
+pub fn get_players_adjacent_to_tile(board: &Board, tile_id: TileId) -> Vec<PlayerType> {
     let mut players_on_tile = Vec::new();
     let tile = &board.tiles[tile_id];
 
@@ -178,44 +178,37 @@ pub fn trade_with_bank(
 pub fn buy_development_card(
     board: &mut Board, 
     player_id_type: PlayerType
-) -> Option<DevelopmentCard> {
+) -> Result<Option<PlayerType>, &'static str> { // <-- TIPO DE RETORNO CAMBIADO
     
     let player_index = match board.players.iter().position(|p| p.id == player_id_type) {
         Some(index) => index,
-        None => {
-            println!("Error: No se encontró al jugador {:?}", player_id_type);
-            return None;
-        }
+        None => return Err("Error: No se encontró al jugador."),
     };
 
     if board.development_cards.is_empty() {
-        println!("No se puede comprar: ¡El mazo de cartas de desarrollo está vacío!");
-        return None;
+        return Err("No se puede comprar: ¡El mazo de cartas de desarrollo está vacío!");
     }
 
     if !has_resources(&board.players[player_index], DEVELOPMENT_CARD_COST) {
-        println!("No se puede comprar: {:?} no tiene los recursos necesarios.", player_id_type);
-        return None;
+        return Err("No se puede comprar: No tienes los recursos necesarios.");
     }
 
     let card_drawn = board.development_cards.pop().unwrap();
-    println!("¡{:?} ha comprado una carta de desarrollo!", player_id_type);
+    println!("¡{:?} ha comprado una carta de desarrollo: {:?}!", player_id_type, card_drawn);
 
     let player = &mut board.players[player_index];
+    
     spend_resources(player, DEVELOPMENT_CARD_COST);
     player.dev_cards.push(card_drawn);
 
+    let mut winner = None;
     if card_drawn == DevelopmentCard::VictoryPoint {
         println!("¡La carta era un Punto de Victoria!");
         player.victory_points += 1;
-        // ¡Importante! Necesitamos llamar a la función de victoria.
-        // La haremos pública desde `victory.rs` y la importaremos aquí.
-        // Por ahora, lo dejamos así, pero `main.rs` deberá llamarla.
-        // O mejor, `buy_development_card` debe devolver Option<PlayerType>
-        // y llamar a `check_for_winner` (lo haremos en el siguiente paso).
+        winner = check_for_winner(board); // Comprueba si esto les da la victoria
     }
 
-    Some(card_drawn)
+    Ok(winner) // <-- DEVUELVE OK
 }
 
 pub fn place_robber (

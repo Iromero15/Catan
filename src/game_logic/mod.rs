@@ -12,7 +12,8 @@ mod victory;
 pub use building::{
     place_house, 
     place_city, 
-    place_road, 
+    place_road,
+    is_road_adjacent_to_vertex,
     is_road_connectable
 };
 
@@ -22,12 +23,12 @@ pub use economy::{
     give_starting_resources, 
     trade_with_bank, 
     buy_development_card, 
-    place_robber
+    place_robber,
+    get_players_adjacent_to_tile // <-- ¡AÑADE ESTA LÍNEA!
 };
 
 // Desde `victory.rs`
 pub use victory::{
     check_for_winner, 
-    update_largest_army, 
-    update_longest_road
+    update_largest_army
 };

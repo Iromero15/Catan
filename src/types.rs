@@ -2,7 +2,6 @@
 pub type VertexId = usize;
 pub type TileId = usize;
 pub type EdgeId = usize;
-pub type PlayerID = usize;
 
 use std::collections::HashMap;
 

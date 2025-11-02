@@ -2,8 +2,7 @@
 
 use crate::types::*;
 // Importa las funciones de lógica que necesitamos
-use crate::game_logic::{place_robber, place_road, is_road_connectable, update_largest_army}; 
-use std::collections::HashMap;
+use crate::game_logic::{place_robber, place_road, update_largest_army}; 
 
 /**
  * Función auxiliar para encontrar y quitar una carta de la
@@ -75,41 +74,43 @@ pub fn play_road_building_card(
     player_id: PlayerType,
     edge1_pos: EdgeId,
     edge2_pos: EdgeId
-) -> bool {
-    
-    // Paso 1: Encontrar al jugador
-    let player_index = board.players.iter().position(|p| p.id == player_id).unwrap();
+) -> Result<Option<PlayerType>, &'static str> { // <-- 1. TIPO DE RETORNO CORREGIDO
 
-    // Paso 2: Chequear reglas
+    let player_index = match board.players.iter().position(|p| p.id == player_id) {
+        Some(idx) => idx,
+        None => return Err("Error: No se encontró al jugador."),
+    };
+
+    // --- Chequeos ---
     if board.players[player_index].played_dev_card_this_turn {
-        println!("Error: Ya has jugado una carta de desarrollo este turno.");
-        return false;
+        return Err("Error: Ya has jugado una carta de desarrollo este turno.");
     }
-    
     if board.players[player_index].road_quantity < 2 {
-        println!("Error: No tienes suficientes piezas de camino (necesitas 2).");
-        return false;
+        return Err("Error: No tienes suficientes piezas de camino (necesitas 2).");
     }
-
-    // Paso 3: Consumir la carta
     if !consume_card(&mut board.players[player_index], DevelopmentCard::RoadBuilding) {
-        println!("Error: {:?} no tiene una carta de Construcción de Caminos.", player_id);
-        return false;
+        return Err("Error: No tienes una carta de Construcción de Caminos.");
     }
 
-    // Paso 4: Ejecutar la lógica
+    // --- Lógica ---
     board.players[player_index].played_dev_card_this_turn = true;
     println!("¡{:?} ha jugado Construcción de Caminos!", player_id);
 
-    // Colocar el primer camino (gratis)
-    place_road(board, player_id, edge1_pos, TurnPhase::FreeRoad);
+    // 2. Colocar el primer camino
+    // Usamos `?` para propagar el error si `place_road` falla.
+    let winner1 = place_road(board, player_id, edge1_pos, TurnPhase::FreeRoad)?;
+    if winner1.is_some() {
+        return Ok(winner1); // ¡Ganó con el primer camino!
+    }
     
-    // Colocar el segundo camino (gratis)
-    // (El `board` ya está actualizado, así que el 2do camino
-    // puede conectarse al 1ro)
-    place_road(board, player_id, edge2_pos, TurnPhase::FreeRoad);
-    
-    true
+    // 3. Colocar el segundo camino
+    let winner2 = place_road(board, player_id, edge2_pos, TurnPhase::FreeRoad)?;
+    if winner2.is_some() {
+        return Ok(winner2); // ¡Ganó con el segundo camino!
+    }
+
+    // Si no ganó, devuelve Éxito sin ganador
+    Ok(None)
 }
 
 /**

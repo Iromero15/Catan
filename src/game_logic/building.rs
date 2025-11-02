@@ -1,67 +1,53 @@
 // en src/game_logic/building.rs
 
 use crate::types::*;
-use std::collections::HashMap; // Necesario para los costos
-// Importamos las funciones de economía y victoria que necesitamos
 use super::economy::{has_resources, spend_resources};
 use super::victory::{check_for_winner, update_longest_road};
 
 // --- CONSTANTES DE COSTO ---
 const SETTLEMENT_COST: &[(MaterialType, u8)] = &[
-    (MaterialType::Brick, 1),
-    (MaterialType::Wood, 1),
-    (MaterialType::Sheep, 1),
-    (MaterialType::Wheat, 1),
+    (MaterialType::Brick, 1), (MaterialType::Wood, 1),
+    (MaterialType::Sheep, 1), (MaterialType::Wheat, 1),
 ];
-
-const ROAD_COST: &[(MaterialType, u8)] = &[
-    (MaterialType::Brick, 1),
-    (MaterialType::Wood, 1),
-];
-
-const CITY_COST: &[(MaterialType, u8)] = &[
-    (MaterialType::Wheat, 2),
-    (MaterialType::Stone, 3),
-];
+const ROAD_COST: &[(MaterialType, u8)] = &[(MaterialType::Brick, 1), (MaterialType::Wood, 1)];
+const CITY_COST: &[(MaterialType, u8)] = &[(MaterialType::Wheat, 2), (MaterialType::Stone, 3)];
 
 // --- FUNCIONES AUXILIARES (PRIVADAS) ---
 
 fn has_road_connected(board: &Board, player_id: PlayerType, position: VertexId) -> bool {
     let pos: &Vertex = &board.vertices[position];
     for &edge_id in &pos.adjacent_edges {
-        let edge = &board.edges[edge_id];
-        if edge.owner == Some(player_id) {
+        if board.edges[edge_id].owner == Some(player_id) {
             return true;
         }
     }
-    println!("no hay Camino conectado");
-    return false;
+    false
 }
 
-fn can_place_house(board: &Board, position: VertexId) -> bool {
+fn can_place_house(board: &Board, position: VertexId) -> Result<(), &'static str> {
+    if position >= board.vertices.len() {
+        return Err("Posición inválida: El vértice no existe.");
+    }
     let pos: &Vertex = &board.vertices[position];
     if pos.owner.is_some() {
-        println!("No se puede construir en {}: la casilla ya está ocupada.", position);
-        return false;
+        return Err("No se puede construir: la casilla ya está ocupada.");
     }
     for &edge_id in &pos.adjacent_edges {
         let edge = &board.edges[edge_id];
         let (v1, v2) = edge.vertices;
         let neighbor_v_id = if v1 == position { v2 } else { v1 };
         if !check_self_is_empty(board, neighbor_v_id) {
-            println!("No se puede construir en {}: el vecino {} está ocupado.", position, neighbor_v_id);
-            return false;
+            return Err("No se puede construir: el vecino está ocupado (Regla de Distancia).");
         }
     }
-    return true;
+    Ok(())
 }
 
 fn check_self_is_empty(board: &Board, position: VertexId) -> bool {
-    let pos: &Vertex = &board.vertices[position];
-    pos.owner.is_none()
+    board.vertices[position].owner.is_none()
 }
 
-fn is_road_adjacent_to_vertex(board: &Board, edge_id: EdgeId, vertex_id: VertexId) -> bool {
+pub fn is_road_adjacent_to_vertex(board: &Board, edge_id: EdgeId, vertex_id: VertexId) -> bool {
     let (v1, v2) = board.edges[edge_id].vertices;
     v1 == vertex_id || v2 == vertex_id
 }
@@ -77,6 +63,7 @@ fn is_settlement_owned_by(board: &Board, player_id: PlayerType, position: Vertex
 // --- FUNCIONES PÚBLICAS ---
 
 pub fn is_road_connectable(board: &Board, player_id: PlayerType, edge_id: EdgeId) -> bool {
+    if edge_id >= board.edges.len() { return false; }
     let (v1, v2) = board.edges[edge_id].vertices;
     if board.vertices[v1].owner == Some(player_id) || board.vertices[v2].owner == Some(player_id) {
         return true;
@@ -99,29 +86,27 @@ pub fn place_road (
     player_id_type: PlayerType, 
     edge_position: EdgeId,
     turn_phase: TurnPhase
-) -> Option<PlayerType>{
+) -> Result<Option<PlayerType>, &'static str> { // <-- TIPO DE RETORNO CAMBIADO
     
+    if edge_position >= board.edges.len() {
+        return Err("Posición inválida: El borde no existe.");
+    }
+
     let player_index = match board.players.iter().position(|p| p.id == player_id_type) {
         Some(index) => index,
-        None => {
-            println!("Error: No se encontró al jugador {:?}", player_id_type);
-            return None;
-        }
+        None => return Err("Error: No se encontró al jugador."),
     };
 
     if board.players[player_index].road_quantity == 0 {
-        println!("No se puede construir: {:?} no tiene más caminos disponibles.", player_id_type);
-        return None;
+        return Err("No se puede construir: No tienes más caminos disponibles.");
     }
     if board.edges[edge_position].owner.is_some() {
-        println!("No se puede construir: El borde {} ya está ocupado.", edge_position);
-        return None;
+        return Err("No se puede construir: El borde ya está ocupado.");
     }
 
     if let TurnPhase::Normal = turn_phase {
         if !has_resources(&board.players[player_index], ROAD_COST) {
-            println!("No se puede construir: {:?} no tiene los recursos necesarios.", player_id_type);
-            return None;
+            return Err("No se puede construir: No tienes los recursos necesarios.");
         }
     }
 
@@ -135,14 +120,13 @@ pub fn place_road (
     };
 
     if !is_connected {
-        println!("No se puede construir: El camino no está conectado correctamente (Fase: {:?}).", turn_phase);
-        return None;
+        return Err("No se puede construir: El camino no está conectado correctamente.");
     }
     
     board.edges[edge_position].owner = Some(player_id_type);
 
     let player = &mut board.players[player_index];
-    player.road_quantity -= 1; // <-- Bug corregido, solo se resta una vez
+    player.road_quantity -= 1;
 
     if let TurnPhase::Normal = turn_phase {
         spend_resources(player, ROAD_COST);
@@ -152,30 +136,28 @@ pub fn place_road (
     }
     
     println!("A {:?} le quedan {} caminos.", player.id, player.road_quantity);
-    update_longest_road(board, player_id_type)
+    Ok(update_longest_road(board, player_id_type)) // <-- DEVUELVE OK
 }
 
-pub fn place_city (board: &mut Board, player_id_type: PlayerType, position: VertexId) -> Option<PlayerType>{
+pub fn place_city (board: &mut Board, player_id_type: PlayerType, position: VertexId) -> Result<Option<PlayerType>, &'static str> { // <-- TIPO DE RETORNO CAMBIADO
+    
+    if position >= board.vertices.len() {
+        return Err("Posición inválida: El vértice no existe.");
+    }
     if !is_settlement_owned_by(board, player_id_type, position) {
-        println!("No se puede construir: {:?} no posee un asentamiento en {}.", player_id_type, position);
-        return None;
+        return Err("No se puede construir: No posees un asentamiento en esta posición.");
     }
 
     let player_index = match board.players.iter().position(|p| p.id == player_id_type) {
         Some(index) => index,
-        None => {
-            println!("Error: No se encontró al jugador {:?}", player_id_type);
-            return None;
-        }
+        None => return Err("Error: No se encontró al jugador."),
     };
 
     if board.players[player_index].city_quantity == 0 {
-        println!("No se puede construir: {:?} no tiene más ciudades disponibles.", player_id_type);
-        return None;
+        return Err("No se puede construir: No tienes más ciudades disponibles.");
     }
     if !has_resources(&board.players[player_index], CITY_COST) {
-        println!("No se puede construir: {:?} no tiene los recursos necesarios.", player_id_type);
-        return None;
+        return Err("No se puede construir: No tienes los recursos necesarios.");
     }
 
     board.vertices[position].building = Some(BuildingType::City);
@@ -188,38 +170,33 @@ pub fn place_city (board: &mut Board, player_id_type: PlayerType, position: Vert
 
     println!("¡Ciudad construida con éxito en {} para {:?}!", position, player_id_type);
     println!("A {:?} le quedan {} ciudades y tiene {} puntos.", player.id, player.city_quantity, player.victory_points);
-    check_for_winner(board)
+    Ok(check_for_winner(board)) // <-- DEVUELVE OK
 }
 
-pub fn place_house (board: &mut Board, player_id_type: PlayerType, position: VertexId, is_first_turn: bool) -> Option<PlayerType>{
-    if !can_place_house(board, position) {
-        return None;
+pub fn place_house (board: &mut Board, player_id_type: PlayerType, position: VertexId, is_first_turn: bool) -> Result<Option<PlayerType>, &'static str> { // <-- TIPO DE RETORNO CAMBIADO
+    
+    if let Err(msg) = can_place_house(board, position) {
+        return Err(msg); // Propaga el error de la regla de distancia
     }
     
     let player_index = match board.players.iter().position(|p| p.id == player_id_type) {
         Some(index) => index,
-        None => {
-            println!("Error: No se encontró al jugador {:?}", player_id_type);
-            return None;
-        }
+        None => return Err("Error: No se encontró al jugador."),
     };
     
     if is_first_turn {
         // Turno de fundación
     } else {
         if !has_road_connected(board, player_id_type, position) {
-            println!("No se puede construir en {}: No tienes un camino conectado.", position);
-            return None;
+            return Err("No se puede construir: No tienes un camino conectado.");
         }
         if !has_resources(&board.players[player_index], SETTLEMENT_COST) {
-            println!("No se puede construir: {:?} no tiene los recursos necesarios.", player_id_type);
-            return None;
+            return Err("No se puede construir: No tienes los recursos necesarios.");
         }
     }
     
     if board.players[player_index].settlement_quantity == 0 {
-        println!("No se puede construir: {:?} no tiene más asentamientos disponibles.", player_id_type);
-        return None;
+        return Err("No se puede construir: No tienes más asentamientos disponibles.");
     }
 
     board.vertices[position].owner = Some(player_id_type);
@@ -246,5 +223,5 @@ pub fn place_house (board: &mut Board, player_id_type: PlayerType, position: Ver
     }
     
     println!("A {:?} le quedan {} asentamientos y tiene {} puntos.", player.id, player.settlement_quantity, player.victory_points);
-    check_for_winner(board)
+    Ok(check_for_winner(board)) // <-- DEVUELVE OK
 }
